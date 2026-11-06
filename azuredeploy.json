@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.48.1.52935",
-      "templateHash": "9730918003464909175"
+      "templateHash": "12241987078413504501"
     }
   },
   "parameters": {
@@ -49,9 +49,28 @@
     },
     "allowedIngressCidrs": {
       "type": "array",
-      "minLength": 1,
+      "defaultValue": [],
       "metadata": {
-        "description": "CIDR ranges allowed to reach the HTTPS front end (ingress IP allow-list). Include Pype egress addresses."
+        "description": "OPTIONAL. CIDR ranges allowed to reach the HTTPS front end (ingress IP allow-list). Empty (default) = no IP rule: the front end is then reachable from anywhere and the JWT (and, if you choose, a client certificate) is the only gate. See docs/INSTALL-AZURE.md, \"Network options\"."
+      }
+    },
+    "clientCertificateMode": {
+      "type": "string",
+      "defaultValue": "ignore",
+      "allowedValues": [
+        "ignore",
+        "accept",
+        "require"
+      ],
+      "metadata": {
+        "description": "Client certificate (mTLS) mode of the front-end ingress. ignore = off (default). accept = a certificate is optional and forwarded. require = connections without a client certificate are refused. Azure does NOT validate the certificate chain: set clientCertSha256 to pin Pype's certificate."
+      }
+    },
+    "clientCertSha256": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "OPTIONAL. Comma-separated SHA-256 fingerprints (hex, no colons) of the client certificate(s) Pype presents. When set (needs clientCertificateMode accept or require) the front end returns 403 to any other certificate. Empty = no pinning."
       }
     },
     "postgresAdminPassword": {
@@ -66,6 +85,13 @@
         "description": "Password for the PostgREST login role `authenticator`; set on the server by the migrate job."
       }
     },
+    "assignRoles": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "TEST ONLY. false skips every role assignment (for deployers without Owner / User Access Administrator) and passes secrets to the container apps inline instead of by Key Vault reference. The signer cannot read storage in this mode. Leave true for real installs."
+      }
+    },
     "postgresSku": {
       "type": "string",
       "defaultValue": "Standard_D2ds_v5"
@@ -74,20 +100,20 @@
       "type": "string",
       "defaultValue": "postgrest/postgrest:v16.5",
       "metadata": {
-        "description": "Container images. Defaults point at images that are NOT published yet (no registry exists); override before deploying."
+        "description": "Container images. Defaults are the public images published by this repo's workflow (ghcr.io, must be public: see README)."
       }
     },
     "signerImage": {
       "type": "string",
-      "defaultValue": "ghcr.io/pype-ai-main/pype-customer-stack-signer:0.1.0"
+      "defaultValue": "ghcr.io/pype-ai-main/pype-whispey-onprem-signer:0.1.0"
     },
     "migrateImage": {
       "type": "string",
-      "defaultValue": "ghcr.io/pype-ai-main/pype-customer-stack-migrate:0.1.0"
+      "defaultValue": "ghcr.io/pype-ai-main/pype-whispey-onprem-migrate:0.1.0"
     },
     "frontendImage": {
       "type": "string",
-      "defaultValue": "ghcr.io/pype-ai-main/pype-customer-stack-frontend:0.1.0"
+      "defaultValue": "ghcr.io/pype-ai-main/pype-whispey-onprem-frontend:0.1.0"
     }
   },
   "variables": {
@@ -632,6 +658,9 @@
           },
           "jwksJson": {
             "value": "[parameters('jwksJson')]"
+          },
+          "assignRoles": {
+            "value": "[parameters('assignRoles')]"
           }
         },
         "template": {
@@ -641,7 +670,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "9373681065539594662"
+              "templateHash": "7202724791393686327"
             }
           },
           "parameters": {
@@ -675,6 +704,10 @@
               "metadata": {
                 "description": "PUBLIC key set (JWKS JSON) of the signing service. The customer never holds a private key."
               }
+            },
+            "assignRoles": {
+              "type": "bool",
+              "defaultValue": true
             }
           },
           "resources": [
@@ -741,6 +774,7 @@
               ]
             },
             {
+              "condition": "[parameters('assignRoles')]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
               "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
@@ -785,6 +819,7 @@
       ]
     },
     {
+      "condition": "[parameters('assignRoles')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "storageRoles",
@@ -925,6 +960,30 @@
           },
           "allowedIngressCidrs": {
             "value": "[parameters('allowedIngressCidrs')]"
+          },
+          "clientCertificateMode": {
+            "value": "[parameters('clientCertificateMode')]"
+          },
+          "clientCertSha256": {
+            "value": "[parameters('clientCertSha256')]"
+          },
+          "identityClientId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'identity'), '2025-04-01').outputs.clientId.value]"
+          },
+          "inlineSecrets": {
+            "value": "[not(parameters('assignRoles'))]"
+          },
+          "jwksValue": {
+            "value": "[parameters('jwksJson')]"
+          },
+          "dbUriValue": {
+            "value": "[format('postgres://authenticator:{0}@{1}:5432/{2}?sslmode=require', uriComponent(parameters('authenticatorPassword')), reference(resourceId('Microsoft.Resources/deployments', 'postgres'), '2025-04-01').outputs.fqdn.value, variables('databaseName'))]"
+          },
+          "pgAdminValue": {
+            "value": "[parameters('postgresAdminPassword')]"
+          },
+          "authenticatorValue": {
+            "value": "[parameters('authenticatorPassword')]"
           }
         },
         "template": {
@@ -934,7 +993,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "9174082436450681924"
+              "templateHash": "8781119980852888015"
             }
           },
           "parameters": {
@@ -1001,11 +1060,56 @@
             "authenticatorSecretUri": {
               "type": "string"
             },
+            "inlineSecrets": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "TEST ONLY: pass the secrets inline instead of by Key Vault reference (no role assignment needed)."
+              }
+            },
+            "jwksValue": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "dbUriValue": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "pgAdminValue": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "authenticatorValue": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
             "allowedIngressCidrs": {
               "type": "array",
-              "minLength": 1,
+              "defaultValue": [],
               "metadata": {
-                "description": "CIDR ranges allowed to reach the front end (Pype egress addresses plus the customer's own). Required: the front end is never open to the world by default."
+                "description": "OPTIONAL. CIDR ranges allowed to reach the front end. Empty = no IP rule (JWT, and the client certificate if enabled, still apply)."
+              }
+            },
+            "clientCertificateMode": {
+              "type": "string",
+              "defaultValue": "ignore",
+              "allowedValues": [
+                "ignore",
+                "accept",
+                "require"
+              ]
+            },
+            "clientCertSha256": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Comma-separated SHA-256 fingerprints of the allowed client certificate(s); empty = no pinning."
+              }
+            },
+            "identityClientId": {
+              "type": "string",
+              "metadata": {
+                "description": "Client id of the user-assigned identity (the signer uses it to get a Storage token)."
               }
             }
           },
@@ -1072,20 +1176,10 @@
                     "external": true,
                     "targetPort": 8080,
                     "transport": "auto",
-                    "allowInsecure": false
+                    "allowInsecure": false,
+                    "clientCertificateMode": "[parameters('clientCertificateMode')]"
                   },
-                  "secrets": [
-                    {
-                      "name": "jwks",
-                      "keyVaultUrl": "[parameters('jwksSecretUri')]",
-                      "identity": "[parameters('identityId')]"
-                    },
-                    {
-                      "name": "db-uri",
-                      "keyVaultUrl": "[parameters('dbUriSecretUri')]",
-                      "identity": "[parameters('identityId')]"
-                    }
-                  ]
+                  "secrets": "[if(parameters('inlineSecrets'), createArray(createObject('name', 'jwks', 'value', parameters('jwksValue')), createObject('name', 'db-uri', 'value', parameters('dbUriValue'))), createArray(createObject('name', 'jwks', 'keyVaultUrl', parameters('jwksSecretUri'), 'identity', parameters('identityId')), createObject('name', 'db-uri', 'keyVaultUrl', parameters('dbUriSecretUri'), 'identity', parameters('identityId'))))]"
                 },
                 "template": {
                   "scale": {
@@ -1119,6 +1213,12 @@
                       "name": "nginx",
                       "image": "[parameters('frontendImage')]",
                       "resources": "[variables('small')]",
+                      "env": [
+                        {
+                          "name": "PYPE_CLIENT_CERT_SHA256",
+                          "value": "[parameters('clientCertSha256')]"
+                        }
+                      ],
                       "probes": [
                         {
                           "type": "Readiness",
@@ -1226,16 +1326,19 @@
                           "value": "[parameters('storageAccountName')]"
                         },
                         {
-                          "name": "BUCKET",
+                          "name": "AZURE_STORAGE_CONTAINER",
                           "value": "[parameters('recordingsContainer')]"
+                        },
+                        {
+                          "name": "AZURE_CLIENT_ID",
+                          "value": "[parameters('identityClientId')]"
                         }
                       ],
                       "probes": [
                         {
                           "type": "Liveness",
-                          "httpGet": {
-                            "port": 8081,
-                            "path": "/signer/v1/health"
+                          "tcpSocket": {
+                            "port": 8081
                           }
                         }
                       ]
@@ -1269,18 +1372,7 @@
                     "parallelism": 1,
                     "replicaCompletionCount": 1
                   },
-                  "secrets": [
-                    {
-                      "name": "pg-admin-password",
-                      "keyVaultUrl": "[parameters('pgAdminSecretUri')]",
-                      "identity": "[parameters('identityId')]"
-                    },
-                    {
-                      "name": "authenticator-password",
-                      "keyVaultUrl": "[parameters('authenticatorSecretUri')]",
-                      "identity": "[parameters('identityId')]"
-                    }
-                  ]
+                  "secrets": "[if(parameters('inlineSecrets'), createArray(createObject('name', 'pg-admin-password', 'value', parameters('pgAdminValue')), createObject('name', 'authenticator-password', 'value', parameters('authenticatorValue'))), createArray(createObject('name', 'pg-admin-password', 'keyVaultUrl', parameters('pgAdminSecretUri'), 'identity', parameters('identityId')), createObject('name', 'authenticator-password', 'keyVaultUrl', parameters('authenticatorSecretUri'), 'identity', parameters('identityId'))))]"
                 },
                 "template": {
                   "containers": [
